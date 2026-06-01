@@ -34,12 +34,6 @@ jobs:
       - name: Build with Maven
         run: mvn clean package -DskipTests
 
-      - name: Rename JAR with version
-        run: |
-          VERSION=${{ steps.version.outputs.version }}
-          cp target/seatunnel-transform-fieldconvert-*.jar \
-             target/seatunnel-transform-fieldconvert-${VERSION}.jar
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -68,7 +62,7 @@ jobs:
             }
             ```
           files: |
-            target/seatunnel-transform-fieldconvert-${{ steps.version.outputs.version }}.jar
+            target/seatunnel-transform-fieldconvert-*.jar
           draft: false
           prerelease: false
         env:
