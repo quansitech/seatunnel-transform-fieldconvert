@@ -1,2 +1,3 @@
 .omc
 target
+__pycache__/
