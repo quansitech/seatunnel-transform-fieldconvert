@@ -11,10 +11,10 @@ SeaTunnel 自定义 Transform 插件，支持在数据同步管道中对指定�
 
 ## 支持的转换方法
 
-| method | 说明 | 额外参数 |
-|--------|------|----------|
+| method                         | 说明                                           | 额外参数                       |
+| ------------------------------ | ---------------------------------------------- | ------------------------------ |
 | `unix_timestamp_to_datetime` | 将 int/long/decimal 时间戳转换为 LocalDateTime | `timezone`（时区，默认 UTC） |
-| `cast` | 数值类型转换（如 tinyint → int） | `target_type`（目标类型） |
+| `cast`                       | 数值类型转换（如 tinyint → int）              | `target_type`（目标类型）    |
 
 ### cast 支持的 target_type
 
@@ -69,11 +69,11 @@ transform {
 
 ### table_pattern 匹配规则
 
-| 格式 | 含义 | 示例 |
-|------|------|------|
-| `database.table` | 精确匹配 | `donation.qs_book_info` |
-| `database.*` | 匹配该库下所有表 | `donation.*` |
-| `*.*` 或省略 | 匹配所有表 | — |
+| 格式               | 含义             | 示例                      |
+| ------------------ | ---------------- | ------------------------- |
+| `database.table` | 精确匹配         | `donation.qs_book_info` |
+| `database.*`     | 匹配该库下所有表 | `donation.*`            |
+| `*.*` 或省略     | 匹配所有表       | —                        |
 
 ## 配置示例
 
@@ -206,61 +206,128 @@ seatunnel-transform-fieldconvert/
 
 ## SeaTunnel REST API 管理 Job
 
-Base URL: `http://<master-host>:5801`（集群模式）
+SeaTunnel 2.3.13 有两套 REST API：
 
-### 查看运行中的 Job
+| 版本                 | Base URL                                         | 认证                                                                                          | 说明                                              |
+| -------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **v2（推荐）** | `http://<master-host>:8084`（容器内 `8080`） | Basic Auth：`admin / <password>`（见 `seatunnel.yaml` 的 `basic-auth-username/password`） | Jetty 实现，支持提交/查询/停止任务，Web UI 同端口 |
+| v1（已废弃）         | `http://<master-host>:5801`                    | 无                                                                                            | Hazelcast REST，官方默认关闭，仅作兼容            |
+
+### 提交 Job：POST /submit-job（v2）
+
+Query 参数：
+
+| 参数                     | 必填 | 说明                                              |
+| ------------------------ | ---- | ------------------------------------------------- |
+| `jobName`              | 否   | 任务名，便于在任务列表里识别                      |
+| `jobId`                | 否   | 自定义 jobId，不传自动生成                        |
+| `isStartWithSavePoint` | 否   | 是否从 savepoint 恢复（需同时传`jobId`）        |
+| `format`               | 否   | 请求体格式：`json`（默认）/ `hocon` / `sql` |
+
+请求体直接放配置内容（HOCON/SQL 按纯文本读取，`Content-Type: text/plain` 即可）。
+
+**方式一：直接提交 HOCON 配置内容（推荐，可直接复用现有 .conf）**
 
 ```bash
+curl -s -u 'admin:<password>' -X POST \
+  'http://localhost:8084/submit-job?jobName=mysql-to-ch-marathon-2&format=hocon' \
+  -H 'Content-Type: text/plain; charset=UTF-8' \
+  --data-binary @./config/mysql_to_clickhouse_marathon_2.conf
+
+# 响应（jobId 自动生成）
+{"jobId":"<自动生成>","jobName":"mysql-to-ch-marathon-2"}
+```
+
+**方式二：multipart 上传配置文件**（字段名固定为 `config_file`，支持 `.conf`/`.config`/`.json`/`.sql`）
+
+```bash
+curl -s -u 'admin:<password>' -X POST \
+  'http://localhost:8084/submit-job/upload?jobName=mysql-to-ch-marathon-2' \
+  -F 'config_file=@./config/mysql_to_clickhouse_marathon_2.conf'
+```
+
+**方式三：JSON 格式**（`format=json`，插件用 `plugin_name`，source/sink 为数组）
+
+```bash
+curl -s -u 'admin:<password>' -X POST \
+  'http://localhost:8084/submit-job?jobName=fake-to-console&format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "env": { "job.mode": "BATCH" },
+    "source": [
+      { "plugin_name": "FakeSource", "plugin_output": "fake", "row.num": 10,
+        "schema": { "fields": { "name": "string", "age": "int" } } }
+    ],
+    "transform": [],
+    "sink": [ { "plugin_name": "Console", "plugin_input": ["fake"] } ]
+  }'
+
+# 响应（jobId 自动生成）
+{"jobId":"<自动生成>","jobName":"fake-to-console"}
+```
+
+> **REST 提交 vs CLI 提交**：REST 提交的任务由集群托管，HTTP 请求结束/客户端断开**不会取消任务**；而 `seatunnel.sh` 默认 `-cj=true`，客户端退出会取消任务（需要 `--async` 或 `-cj false`）。脚本/CI 里提交常驻的 STREAMING 任务推荐用 REST。
+
+### 查询 Job（v2）
+
+```bash
+# 集群概览（运行/完成/失败任务数）
+curl -s -u 'admin:<password>' http://localhost:8080/overview
+
+# 运行中的任务
+curl -s -u 'admin:<password>' http://localhost:8080/running-jobs
+
+# 已结束的任务
+curl -s -u 'admin:<password>' 'http://localhost:8080/finished-jobs?page=1&rows=10'
+
+# 任务详情（jobStatus / errorMsg / metrics）
+curl -s -u 'admin:<password>' http://localhost:8080/job-info/<JOB_ID>
+
+# checkpoint 概览 / 历史
+curl -s -u 'admin:<password>' http://localhost:8080/jobs/checkpoints/<JOB_ID>
+curl -s -u 'admin:<password>' 'http://localhost:8080/jobs/checkpoints/history/<JOB_ID>?limit=10&status=COMPLETED'
+```
+
+### 停止 Job（v2）
+
+```bash
+curl -s -u 'admin:<password>' -X POST http://localhost:8080/stop-job \
+  -H 'Content-Type: application/json' \
+  -d '{"jobId": "<JOB_ID>", "isStopWithSavePoint": false}'
+```
+
+### 旧版 v1 API（5801，兼容用）
+
+```bash
+# 查看运行中的任务
 curl -s http://localhost:5801/hazelcast/rest/maps/running-jobs
-```
 
-简洁输出：
+# 任务详情
+curl -s http://localhost:5801/hazelcast/rest/maps/job-info/<JOB_ID>
 
-```bash
-curl -s http://localhost:5801/hazelcast/rest/maps/running-jobs \
-  | python3 -c "import sys,json
-for j in json.load(sys.stdin):
-    print(j['jobId'], j['jobStatus'], j.get('jobName',''))"
-```
-
-### 查看指定 Job 详情
-
-```bash
-curl -s http://localhost:5801/hazelcast/rest/maps/running-job/<JOB_ID>
-```
-
-### 查看已完成的 Job
-
-```bash
+# 已结束的任务
 curl -s http://localhost:5801/hazelcast/rest/maps/finished-jobs
-```
 
-### 停止 Job
-
-```bash
+# 停止任务
 curl -s -X POST http://localhost:5801/hazelcast/rest/maps/stop-job \
   -H "Content-Type: application/json" \
   -d '{"jobId": "<JOB_ID>"}'
 ```
 
-### 通过 REST API 提交 Job
+### 通过 CLI 提交 Job
 
 ```bash
-curl -s -X POST http://localhost:5801/hazelcast/rest/maps/submit-job \
-  -H "Content-Type: application/json" \
-  -d '{
-    "env": { "job.name": "my-job", "job.mode": "STREAMING" },
-    "source": [{ ... }],
-    "transform": { ... },
-    "sink": [{ ... }]
-  }'
-```
-
-### 通过 CLI 提交 Job（HOCON 配置文件，推荐）
-
-```bash
+# 前台提交并持续观察（客户端退出会取消任务）
 docker exec seatunnel-client ./bin/seatunnel.sh \
   -c ./config/mysql_to_clickhouse_marathon_2.conf -m cluster
+
+# 提交后客户端立即退出，任务留在集群
+docker exec -T seatunnel-client ./bin/seatunnel.sh \
+  -c ./config/mysql_to_clickhouse_marathon_2.conf -m cluster --async
+
+# 或退出客户端但不取消任务
+docker exec seatunnel-client ./bin/seatunnel.sh \
+  -c ./config/mysql_to_clickhouse_marathon_2.conf -m cluster -cj false
 ```
 
 ## 更新插件后重新部署
